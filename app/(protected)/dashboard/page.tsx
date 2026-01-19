@@ -5,15 +5,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import type { Profile, TimeOffBalance, TimeOffRequest, OnboardingTask } from "@/lib/types";
 import { ROLE_LABELS, STATUS_LABELS, ABSENCE_TYPE_LABELS, TASK_STATUS_LABELS } from "@/lib/types";
-import { Calendar, Palmtree, CheckCircle, Clock, AlertCircle } from "lucide-react";
+import { Calendar, Palmtree, CheckCircle, Clock, AlertCircle, Cake } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
-  
+
   const { data: { user } } = await supabase.auth.getUser();
-  
+
   if (!user) {
     redirect("/login");
   }
@@ -24,42 +25,72 @@ export default async function DashboardPage() {
     .eq("id", user.id)
     .single() as { data: Profile | null };
 
-  const currentYear = new Date().getFullYear();
-  
-  const { data: balance } = await supabase
-    .from("time_off_balances")
-    .select("*")
-    .eq("user_id", user.id)
-    .eq("year", currentYear)
-    .single() as { data: TimeOffBalance | null };
+  const today = new Date();
+  const todayStr = today.toISOString().split('T')[0];
+  const currentMonth = today.getMonth() + 1; // getMonth is 0-indexed
+  const currentDay = today.getDate();
 
-  const { data: recentRequests } = await supabase
+  // Fetch people on vacation today
+  const { data: onVacation } = await supabase
     .from("time_off_requests")
-    .select("*")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(5) as { data: TimeOffRequest[] | null };
+    .select("*, profiles(full_name, avatar_url, position)")
+    .eq("status", "aprobada")
+    .lte("start_date", todayStr)
+    .gte("end_date", todayStr) as { data: (TimeOffRequest & { profiles: Profile })[] | null };
 
-  const { data: pendingTasks } = await supabase
+  // Fetch birthdays today
+  // Note: Supabase/Postgres specific query for date parts might need raw SQL or specific filter.
+  // Using a simpler approach: fetch all active profiles and filter in JS if dataset is small, 
+  // OR use .rpc() if we had a function. For now, let's try to select needed fields and filter JS side 
+  // as the employee count is likely low for this MVP. 
+  // Ideally: .filter('birth_date', 'eq', today-month-day pattern) - hard with standard filter.
+  // Alternative: Create a postgres function later if needed. For now, fetch all users with birth_date.
+  const { data: allProfiles } = await supabase
+    .from("profiles")
+    .select("id, full_name, avatar_url, birth_date, position")
+    .eq("is_active", true);
+
+  const birthdaysToday = allProfiles?.filter(p => {
+    if (!p.birth_date) return false;
+    const bdate = new Date(p.birth_date);
+    // Be careful with timezone, birth_date string usually YYYY-MM-DD.
+    // Parse manually to avoid timezone shifts.
+    const [y, m, d] = p.birth_date.split('-').map(Number);
+    return m === currentMonth && d === currentDay;
+  }) || [];
+
+  // Fetch pending tasks - either assigned to user OR from user's own onboarding
+  let pendingTasks: OnboardingTask[] = [];
+
+  // Tasks where user is responsible
+  const { data: responsibleTasks } = await supabase
     .from("onboarding_tasks")
     .select("*")
     .eq("responsible_id", user.id)
-    .eq("status", "pendiente")
+    .neq("status", "completada")
     .limit(5) as { data: OnboardingTask[] | null };
 
-  const availableDays = balance 
-    ? balance.total_days - balance.used_days - balance.pending_days + balance.carryover_days
-    : 15;
+  // Tasks from user's own onboarding process (if empleado)
+  if (profile?.role === "empleado") {
+    const { data: myOnboarding } = await supabase
+      .from("onboarding_processes")
+      .select("id")
+      .eq("employee_id", user.id)
+      .single();
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "aprobada": return "bg-green-500/10 text-green-600 border-green-200";
-      case "rechazada": return "bg-red-500/10 text-red-600 border-red-200";
-      case "enviada": return "bg-yellow-500/10 text-yellow-600 border-yellow-200";
-      case "borrador": return "bg-gray-500/10 text-gray-600 border-gray-200";
-      default: return "bg-gray-500/10 text-gray-600 border-gray-200";
+    if (myOnboarding) {
+      const { data: myTasks } = await supabase
+        .from("onboarding_tasks")
+        .select("*")
+        .eq("onboarding_id", myOnboarding.id)
+        .neq("status", "completada")
+        .limit(5) as { data: OnboardingTask[] | null };
+
+      pendingTasks = myTasks || [];
     }
-  };
+  } else {
+    pendingTasks = responsibleTasks || [];
+  }
 
   return (
     <div className="p-6 lg:p-8 space-y-8">
@@ -78,147 +109,107 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Dias Disponibles</CardTitle>
-            <Palmtree className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-primary">{availableDays}</div>
-            <p className="text-xs text-muted-foreground">
-              de {balance?.total_days || 15} dias totales
-            </p>
-          </CardContent>
-        </Card>
+      {/* Main Content Area */}
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
 
-        <Card>
+        {/* On Vacation Card */}
+        <Card className="col-span-1 lg:col-span-1 border-blue-100 bg-blue-50/20">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Dias Usados</CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-lg font-medium flex items-center gap-2">
+              <Palmtree className="h-5 w-5 text-blue-500" />
+              De Vacaciones Hoy
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{balance?.used_days || 0}</div>
-            <p className="text-xs text-muted-foreground">dias este ano</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Solicitudes Pendientes</CardTitle>
-            <Clock className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{balance?.pending_days || 0}</div>
-            <p className="text-xs text-muted-foreground">dias en espera</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Tareas Pendientes</CardTitle>
-            <AlertCircle className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{pendingTasks?.length || 0}</div>
-            <p className="text-xs text-muted-foreground">tareas asignadas</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Recent Activity */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Recent Time Off Requests */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle>Solicitudes Recientes</CardTitle>
-                <CardDescription>Tus ultimas solicitudes de tiempo libre</CardDescription>
-              </div>
-              <Link href="/time-off">
-                <Button variant="outline" size="sm">Ver todas</Button>
-              </Link>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {recentRequests && recentRequests.length > 0 ? (
+            {onVacation && onVacation.length > 0 ? (
               <div className="space-y-4">
-                {recentRequests.map((request) => (
-                  <div
-                    key={request.id}
-                    className="flex items-center justify-between p-3 rounded-lg border bg-card"
-                  >
-                    <div className="space-y-1">
-                      <p className="font-medium text-sm">
-                        {ABSENCE_TYPE_LABELS[request.absence_type]}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {new Date(request.start_date).toLocaleDateString("es-ES")} - {new Date(request.end_date).toLocaleDateString("es-ES")}
-                      </p>
+                {onVacation.map((req) => (
+                  <div key={req.id} className="flex items-center gap-3 bg-background p-2 rounded-lg border">
+                    <Avatar className="h-10 w-10">
+                      <AvatarImage src={req.profiles.avatar_url || ""} />
+                      <AvatarFallback>{req.profiles.full_name.substring(0, 2).toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <p className="text-sm font-medium">{req.profiles.full_name}</p>
+                      <p className="text-xs text-muted-foreground">{req.profiles.position || "Empleado"}</p>
                     </div>
-                    <Badge variant="outline" className={getStatusColor(request.status)}>
-                      {STATUS_LABELS[request.status]}
-                    </Badge>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="text-center py-8 text-muted-foreground">
-                <Palmtree className="h-12 w-12 mx-auto mb-2 opacity-20" />
-                <p>No tienes solicitudes recientes</p>
-                <Link href="/time-off/new">
-                  <Button variant="link" className="mt-2">Crear solicitud</Button>
-                </Link>
+              <div className="text-center py-6 text-muted-foreground">
+                <p className="text-sm">Nadie está de vacaciones hoy.</p>
               </div>
             )}
           </CardContent>
         </Card>
 
-        {/* Pending Tasks */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle>Tareas de Onboarding</CardTitle>
-                <CardDescription>Tareas pendientes asignadas a ti</CardDescription>
+        {/* Birthdays Card */}
+        <Card className="col-span-1 lg:col-span-1 border-pink-100 bg-pink-50/20">
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-lg font-medium flex items-center gap-2">
+              <Cake className="h-5 w-5 text-pink-500" />
+              Cumpleañeros del Día
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {birthdaysToday.length > 0 ? (
+              <div className="space-y-4">
+                {birthdaysToday.map((p) => (
+                  <div key={p.id} className="flex items-center gap-3 bg-background p-2 rounded-lg border">
+                    <Avatar className="h-10 w-10">
+                      <AvatarImage src={p.avatar_url || ""} />
+                      <AvatarFallback>{p.full_name.substring(0, 2).toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <p className="text-sm font-medium">{p.full_name}</p>
+                      <p className="text-xs text-muted-foreground">¡Deséale un feliz cumpleaños!</p>
+                    </div>
+                  </div>
+                ))}
               </div>
-              <Link href="/onboarding">
-                <Button variant="outline" size="sm">Ver todas</Button>
-              </Link>
-            </div>
+            ) : (
+              <div className="text-center py-6 text-muted-foreground">
+                <p className="text-sm">Hoy no hay cumpleaños.</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Pending Tasks (Kept as it's useful) */}
+        <Card className="col-span-1 lg:col-span-1">
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-lg font-medium flex items-center gap-2">
+              <CheckCircle className="h-5 w-5 text-primary" />
+              Mis Tareas Pendientes
+            </CardTitle>
           </CardHeader>
           <CardContent>
             {pendingTasks && pendingTasks.length > 0 ? (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {pendingTasks.map((task) => (
                   <div
                     key={task.id}
-                    className="flex items-center justify-between p-3 rounded-lg border bg-card"
+                    className="flex items-center justify-between p-2 rounded-lg border bg-card/50"
                   >
-                    <div className="space-y-1">
-                      <p className="font-medium text-sm">{task.title}</p>
-                      {task.due_date && (
-                        <p className="text-xs text-muted-foreground">
-                          Vence: {new Date(task.due_date).toLocaleDateString("es-ES")}
-                        </p>
-                      )}
-                    </div>
-                    <Badge variant="outline">
+                    <p className="font-medium text-sm truncate">{task.title}</p>
+                    <Badge variant="outline" className="text-[10px]">
                       {TASK_STATUS_LABELS[task.status]}
                     </Badge>
                   </div>
                 ))}
+                <Link href="/onboarding">
+                  <Button variant="link" size="sm" className="w-full mt-2 h-auto p-0 text-muted-foreground">Ver todas</Button>
+                </Link>
               </div>
             ) : (
-              <div className="text-center py-8 text-muted-foreground">
-                <CheckCircle className="h-12 w-12 mx-auto mb-2 opacity-20" />
-                <p>No tienes tareas pendientes</p>
+              <div className="text-center py-6 text-muted-foreground">
+                <p className="text-sm">No tienes tareas pendientes.</p>
               </div>
             )}
           </CardContent>
         </Card>
+
       </div>
     </div>
   );

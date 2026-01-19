@@ -49,14 +49,33 @@ export default function NewTimeOffRequestPage() {
     setError(null);
 
     const { data: { user } } = await supabase.auth.getUser();
-    
+
     if (!user) {
       setError("Debes iniciar sesion");
       setIsLoading(false);
       return;
     }
 
+    // Fetch profile to check role
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .single();
+
+    if (profile?.role === "admin_rrhh") {
+      setError("Los administradores de RRHH no pueden solicitar vacaciones.");
+      setIsLoading(false);
+      return;
+    }
+
     const totalDays = calculateDays();
+
+    // Determine initial status if sending
+    let finalStatus: string = status;
+    if (status === "enviada") {
+      finalStatus = profile?.role === "jefe_area" ? "pendiente_rrhh" : "pendiente_jefe";
+    }
 
     const { error: insertError } = await supabase
       .from("time_off_requests")
@@ -66,7 +85,7 @@ export default function NewTimeOffRequestPage() {
         start_date: startDate,
         end_date: endDate,
         total_days: totalDays,
-        status: status,
+        status: finalStatus as any,
         employee_comment: comment || null,
       });
 

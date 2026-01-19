@@ -1,8 +1,9 @@
 export type UserRole = "admin_rrhh" | "jefe_area" | "empleado";
-export type RequestStatus = "borrador" | "enviada" | "aprobada" | "rechazada" | "cancelada";
+export type RequestStatus = "borrador" | "enviada" | "pendiente_jefe" | "pendiente_rrhh" | "aprobada" | "rechazada" | "cancelada";
 export type AbsenceType = "vacaciones" | "dia_personal" | "enfermedad";
 export type TaskStatus = "pendiente" | "en_progreso" | "completada";
 export type TaskCategory = "rrhh" | "it" | "jefe_area";
+export type DocumentCategory = "contrato" | "identificacion" | "fiscal" | "otro";
 
 export interface Profile {
   id: string;
@@ -12,6 +13,7 @@ export interface Profile {
   area_id: string | null;
   position: string | null;
   hire_date: string | null;
+  birth_date: string | null;
   avatar_url: string | null;
   is_active: boolean;
   created_at: string;
@@ -82,6 +84,19 @@ export interface OnboardingTask {
   updated_at: string;
 }
 
+export interface EmployeeDocument {
+  id: string;
+  user_id: string;
+  name: string;
+  file_path: string;
+  category: DocumentCategory;
+  uploaded_by: string;
+  size_bytes: number | null;
+  mime_type: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Notification {
   id: string;
   user_id: string;
@@ -103,6 +118,8 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 export const STATUS_LABELS: Record<RequestStatus, string> = {
   borrador: "Borrador",
   enviada: "Enviada",
+  pendiente_jefe: "Pendiente Jefe",
+  pendiente_rrhh: "Pendiente RRHH",
   aprobada: "Aprobada",
   rechazada: "Rechazada",
   cancelada: "Cancelada",
@@ -118,4 +135,11 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   pendiente: "Pendiente",
   en_progreso: "En Progreso",
   completada: "Completada",
+};
+
+export const DOCUMENT_CATEGORY_LABELS: Record<DocumentCategory, string> = {
+  contrato: "Contrato",
+  identificacion: "Identificación",
+  fiscal: "Documento Fiscal",
+  otro: "Otro",
 };

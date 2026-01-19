@@ -27,10 +27,11 @@ interface AppSidebarProps {
 
 const navItems = [
   { href: "/dashboard", label: "Inicio", icon: Home, roles: ["admin_rrhh", "jefe_area", "empleado"] },
+  { href: "/profile", label: "Mi Perfil", icon: Users, roles: ["admin_rrhh", "jefe_area", "empleado"] },
+  { href: "/employees", label: "Empleados", icon: Users, roles: ["admin_rrhh", "jefe_area"] },
   { href: "/time-off", label: "Vacaciones", icon: Palmtree, roles: ["admin_rrhh", "jefe_area", "empleado"] },
   { href: "/calendar", label: "Calendario", icon: Calendar, roles: ["admin_rrhh", "jefe_area", "empleado"] },
   { href: "/onboarding", label: "Onboarding", icon: UserPlus, roles: ["admin_rrhh", "jefe_area"] },
-  { href: "/admin/users", label: "Usuarios", icon: Users, roles: ["admin_rrhh"] },
   { href: "/admin/settings", label: "Configuracion", icon: Settings, roles: ["admin_rrhh"] },
 ];
 

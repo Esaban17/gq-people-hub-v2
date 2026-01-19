@@ -8,6 +8,7 @@ import type { Profile, OnboardingProcess, OnboardingTask } from "@/lib/types";
 import { TASK_STATUS_LABELS } from "@/lib/types";
 import { Plus, UserPlus, CheckCircle, Clock, AlertCircle } from "lucide-react";
 import Link from "next/link";
+import { OnboardingActions } from "@/components/onboarding/onboarding-actions";
 
 interface OnboardingWithDetails extends OnboardingProcess {
   profiles: { full_name: string; email: string };
@@ -16,9 +17,9 @@ interface OnboardingWithDetails extends OnboardingProcess {
 
 export default async function OnboardingPage() {
   const supabase = await createClient();
-  
+
   const { data: { user } } = await supabase.auth.getUser();
-  
+
   if (!user) {
     redirect("/login");
   }
@@ -117,7 +118,7 @@ export default async function OnboardingPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {onboardingProcesses?.reduce((acc, p) => 
+              {onboardingProcesses?.reduce((acc, p) =>
                 acc + (p.onboarding_tasks?.filter((t) => t.status === "pendiente").length || 0), 0
               ) || 0}
             </div>
@@ -141,22 +142,32 @@ export default async function OnboardingPage() {
                 const totalTasks = process.onboarding_tasks?.length || 0;
 
                 return (
-                  <Link key={process.id} href={`/onboarding/${process.id}`}>
-                    <div className="p-4 rounded-lg border bg-card hover:bg-accent/50 transition-colors cursor-pointer">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-full bg-primary/10">
-                            <UserPlus className="h-5 w-5 text-primary" />
-                          </div>
-                          <div>
-                            <p className="font-medium">{process.profiles?.full_name}</p>
-                            <p className="text-sm text-muted-foreground">{process.profiles?.email}</p>
-                          </div>
+                  <div key={process.id} className="p-4 rounded-lg border bg-card hover:bg-accent/50 transition-colors">
+                    <div className="flex items-center justify-between mb-3">
+                      <Link href={`/onboarding/${process.id}`} className="flex items-center gap-3 flex-1 cursor-pointer">
+                        <div className="p-2 rounded-full bg-primary/10">
+                          <UserPlus className="h-5 w-5 text-primary" />
                         </div>
+                        <div>
+                          <p className="font-medium">{process.profiles?.full_name}</p>
+                          <p className="text-sm text-muted-foreground">{process.profiles?.email}</p>
+                        </div>
+                      </Link>
+                      <div className="flex items-center gap-2">
                         <Badge variant="outline" className={getStatusColor(process.status)}>
                           {process.status.charAt(0).toUpperCase() + process.status.slice(1)}
                         </Badge>
+                        {profile?.role === "admin_rrhh" && (
+                          <OnboardingActions
+                            processId={process.id}
+                            currentStatus={process.status}
+                            expectedDate={process.expected_completion_date}
+                            notes={process.notes}
+                          />
+                        )}
                       </div>
+                    </div>
+                    <Link href={`/onboarding/${process.id}`} className="block cursor-pointer">
                       <div className="space-y-2">
                         <div className="flex justify-between text-sm">
                           <span className="text-muted-foreground">Progreso</span>
@@ -170,8 +181,8 @@ export default async function OnboardingPage() {
                           <span>Esperado: {new Date(process.expected_completion_date).toLocaleDateString("es-ES")}</span>
                         )}
                       </div>
-                    </div>
-                  </Link>
+                    </Link>
+                  </div>
                 );
               })}
             </div>
