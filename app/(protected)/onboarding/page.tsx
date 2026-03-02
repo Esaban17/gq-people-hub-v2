@@ -1,43 +1,28 @@
-import { createClient } from "@/lib/supabase/server";
+import { requireAuth } from "@/lib/auth-utils";
+import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import type { Profile, OnboardingProcess, OnboardingTask } from "@/lib/types";
+import type { OnboardingTask } from "@/lib/types";
 import { TASK_STATUS_LABELS } from "@/lib/types";
 import { Plus, UserPlus, CheckCircle, Clock, AlertCircle } from "lucide-react";
 import Link from "next/link";
 import { OnboardingActions } from "@/components/onboarding/onboarding-actions";
 
-interface OnboardingWithDetails extends OnboardingProcess {
-  profiles: { full_name: string; email: string };
-  onboarding_tasks: OnboardingTask[];
-}
-
 export default async function OnboardingPage() {
-  const supabase = await createClient();
+  const sessionUser = await requireAuth();
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const profile = await prisma.user.findUnique({
+    where: { id: sessionUser.id },
+    select: { role: true },
+  });
 
-  if (!user) {
-    redirect("/login");
-  }
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .single() as { data: Profile | null };
-
-  // Check if user has permission to view onboarding
   if (profile?.role === "empleado") {
-    // Employees can only see their own onboarding
-    const { data: myOnboarding } = await supabase
-      .from("onboarding_processes")
-      .select("*, profiles!onboarding_processes_employee_id_fkey(full_name, email), onboarding_tasks(*)")
-      .eq("employee_id", user.id)
-      .single() as { data: OnboardingWithDetails | null };
+    const myOnboarding = await prisma.onboardingProcess.findFirst({
+      where: { employee_id: sessionUser.id },
+    });
 
     if (myOnboarding) {
       redirect(`/onboarding/${myOnboarding.id}`);
@@ -45,11 +30,39 @@ export default async function OnboardingPage() {
     redirect("/dashboard");
   }
 
-  // Admin or Jefe de Area - get all onboarding processes
-  const { data: onboardingProcesses } = await supabase
-    .from("onboarding_processes")
-    .select("*, profiles!onboarding_processes_employee_id_fkey(full_name, email), onboarding_tasks(*)")
-    .order("created_at", { ascending: false }) as { data: OnboardingWithDetails[] | null };
+  const processesRaw = await prisma.onboardingProcess.findMany({
+    orderBy: { created_at: "desc" },
+    include: {
+      employee: { select: { full_name: true, email: true } },
+      tasks: true,
+    },
+  });
+
+  const onboardingProcesses = processesRaw.map((p) => ({
+    id: p.id,
+    employee_id: p.employee_id,
+    start_date: p.start_date.toISOString().split("T")[0],
+    expected_completion_date: p.expected_completion_date?.toISOString().split("T")[0] ?? null,
+    status: p.status,
+    notes: p.notes,
+    created_by: p.created_by,
+    created_at: p.created_at.toISOString(),
+    updated_at: p.updated_at.toISOString(),
+    profiles: { full_name: p.employee.full_name, email: p.employee.email },
+    onboarding_tasks: p.tasks.map((t) => ({
+      id: t.id,
+      onboarding_id: t.onboarding_id,
+      title: t.title,
+      description: t.description,
+      category: t.category as OnboardingTask["category"],
+      status: t.status as OnboardingTask["status"],
+      responsible_id: t.responsible_id,
+      due_date: t.due_date?.toISOString().split("T")[0] ?? null,
+      completed_at: t.completed_at?.toISOString() ?? null,
+      created_at: t.created_at.toISOString(),
+      updated_at: t.updated_at.toISOString(),
+    })),
+  }));
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -92,7 +105,7 @@ export default async function OnboardingPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-primary">
-              {onboardingProcesses?.filter((p) => p.status === "activo").length || 0}
+              {onboardingProcesses.filter((p) => p.status === "activo").length}
             </div>
             <p className="text-xs text-muted-foreground">procesos en curso</p>
           </CardContent>
@@ -105,7 +118,7 @@ export default async function OnboardingPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {onboardingProcesses?.filter((p) => p.status === "completado").length || 0}
+              {onboardingProcesses.filter((p) => p.status === "completado").length}
             </div>
             <p className="text-xs text-muted-foreground">este mes</p>
           </CardContent>
@@ -118,9 +131,9 @@ export default async function OnboardingPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {onboardingProcesses?.reduce((acc, p) =>
+              {onboardingProcesses.reduce((acc, p) =>
                 acc + (p.onboarding_tasks?.filter((t) => t.status === "pendiente").length || 0), 0
-              ) || 0}
+              )}
             </div>
             <p className="text-xs text-muted-foreground">en total</p>
           </CardContent>
@@ -134,7 +147,7 @@ export default async function OnboardingPage() {
           <CardDescription>Lista de todos los procesos de incorporacion</CardDescription>
         </CardHeader>
         <CardContent>
-          {onboardingProcesses && onboardingProcesses.length > 0 ? (
+          {onboardingProcesses.length > 0 ? (
             <div className="space-y-4">
               {onboardingProcesses.map((process) => {
                 const progress = calculateProgress(process.onboarding_tasks);

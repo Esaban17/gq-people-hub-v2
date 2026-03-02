@@ -1,5 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
-import { redirect } from "next/navigation";
+import { requireAuth } from "@/lib/auth-utils";
+import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,51 +10,83 @@ import Link from "next/link";
 import { ApprovalActions } from "@/components/time-off/approval-actions";
 
 export default async function TimeOffPage() {
-  const supabase = await createClient();
+  const sessionUser = await requireAuth();
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const profileRaw = await prisma.user.findUnique({
+    where: { id: sessionUser.id },
+  });
 
-  if (!user) {
-    redirect("/login");
-  }
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .single() as { data: Profile | null };
+  const profile: Profile | null = profileRaw
+    ? {
+        id: profileRaw.id,
+        email: profileRaw.email,
+        full_name: profileRaw.full_name,
+        role: profileRaw.role as Profile["role"],
+        area_id: profileRaw.area_id,
+        position: profileRaw.position,
+        hire_date: profileRaw.hire_date?.toISOString().split("T")[0] ?? null,
+        birth_date: profileRaw.birth_date?.toISOString().split("T")[0] ?? null,
+        avatar_url: profileRaw.avatar_url,
+        is_active: profileRaw.is_active,
+        created_at: profileRaw.created_at.toISOString(),
+        updated_at: profileRaw.updated_at.toISOString(),
+      }
+    : null;
 
   const currentYear = new Date().getFullYear();
 
-  const { data: balance } = await supabase
-    .from("time_off_balances")
-    .select("*")
-    .eq("user_id", user.id)
-    .eq("year", currentYear)
-    .single() as { data: TimeOffBalance | null };
+  const balanceRaw = await prisma.timeOffBalance.findFirst({
+    where: { user_id: sessionUser.id, year: currentYear },
+  });
 
-  const { data: requests } = await supabase
-    .from("time_off_requests")
-    .select("*")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false }) as { data: TimeOffRequest[] | null };
+  const balance: TimeOffBalance | null = balanceRaw
+    ? {
+        ...balanceRaw,
+        created_at: balanceRaw.created_at.toISOString(),
+        updated_at: balanceRaw.updated_at.toISOString(),
+      }
+    : null;
 
-  // Fetch requests pending approval if user is Jefe or Admin
+  const requestsRaw = await prisma.timeOffRequest.findMany({
+    where: { user_id: sessionUser.id },
+    orderBy: { created_at: "desc" },
+  });
+
+  const requests: TimeOffRequest[] = requestsRaw.map((r) => ({
+    id: r.id,
+    user_id: r.user_id,
+    absence_type: r.absence_type as TimeOffRequest["absence_type"],
+    start_date: r.start_date.toISOString().split("T")[0],
+    end_date: r.end_date.toISOString().split("T")[0],
+    total_days: r.total_days,
+    status: r.status as TimeOffRequest["status"],
+    employee_comment: r.employee_comment,
+    approver_comment: r.approver_comment,
+    approved_by: r.approved_by,
+    approved_at: r.approved_at?.toISOString() ?? null,
+    created_at: r.created_at.toISOString(),
+    updated_at: r.updated_at.toISOString(),
+  }));
+
   let pendingApprovals: any[] = [];
   if (profile?.role === "jefe_area" || profile?.role === "admin_rrhh") {
-    let query = supabase
-      .from("time_off_requests")
-      .select("*, profiles!time_off_requests_user_id_fkey(full_name)")
-      .order("created_at", { ascending: false });
+    const statusFilter = profile.role === "jefe_area" ? "pendiente_jefe" : "pendiente_rrhh";
 
-    if (profile.role === "jefe_area") {
-      query = query.eq("status", "pendiente_jefe");
-    } else {
-      query = query.eq("status", "pendiente_rrhh");
-    }
+    const pendingRaw = await prisma.timeOffRequest.findMany({
+      where: { status: statusFilter as any },
+      orderBy: { created_at: "desc" },
+      include: { user: { select: { full_name: true } } },
+    });
 
-    const { data } = await query;
-    pendingApprovals = data || [];
+    pendingApprovals = pendingRaw.map((r) => ({
+      id: r.id,
+      absence_type: r.absence_type,
+      start_date: r.start_date.toISOString().split("T")[0],
+      end_date: r.end_date.toISOString().split("T")[0],
+      total_days: r.total_days,
+      employee_comment: r.employee_comment,
+      profiles: { full_name: r.user.full_name },
+    }));
   }
 
   const availableDays = balance
@@ -91,7 +123,6 @@ export default async function TimeOffPage() {
         )}
       </div>
 
-      {/* Quantity Cards */}
       {profile?.role !== "admin_rrhh" && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <Card>
@@ -101,12 +132,9 @@ export default async function TimeOffPage() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-primary">{availableDays}</div>
-              <p className="text-xs text-muted-foreground">
-                de {balance?.total_days || 15} días totales
-              </p>
+              <p className="text-xs text-muted-foreground">de {balance?.total_days || 15} días totales</p>
             </CardContent>
           </Card>
-
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium">Días Usados</CardTitle>
@@ -117,7 +145,6 @@ export default async function TimeOffPage() {
               <p className="text-xs text-muted-foreground">días este año</p>
             </CardContent>
           </Card>
-
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium">Solicitudes Pendientes</CardTitle>
@@ -128,17 +155,6 @@ export default async function TimeOffPage() {
               <p className="text-xs text-muted-foreground">días en espera</p>
             </CardContent>
           </Card>
-
-          {/* Note: The 4th card on dashboard was 'Tareas Pendientes' (Onboarding). 
-              The user said "move cards that are there right now to Vacation component". 
-              Tasks don't belong in Vacation. So I'll only move the 3 vacation-related ones.
-              On Time Off page, there is a 4th card "Pendientes" (days pending). 
-              I already included that above. 
-              The existing Time Off page had 4 cards: Available, Total, Used, Pending.
-              Dashboard had: Available, Used, Pending, Tasks.
-              I will keep the 4th card "Total Anual" from the original Time Off page but style it like the others?
-              Or just stick to the 3 relevant ones + Total.
-           */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium">Total Anual</CardTitle>
@@ -152,7 +168,6 @@ export default async function TimeOffPage() {
         </div>
       )}
 
-      {/* Management Section (Jefe/Admin) */}
       {(profile?.role === "jefe_area" || profile?.role === "admin_rrhh") && (
         <div className="space-y-4">
           <h2 className="text-xl font-semibold flex items-center gap-2">
@@ -163,12 +178,12 @@ export default async function TimeOffPage() {
             <CardContent className="p-0">
               {pendingApprovals.length > 0 ? (
                 <div className="divide-y">
-                  {pendingApprovals.map((request) => (
+                  {pendingApprovals.map((request: any) => (
                     <div key={request.id} className="flex items-center justify-between p-4">
                       <div className="flex flex-col">
-                        <span className="font-medium">{(request.profiles as any).full_name}</span>
+                        <span className="font-medium">{request.profiles.full_name}</span>
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <span>{ABSENCE_TYPE_LABELS[request.absence_type as unknown as import("@/lib/types").AbsenceType] || request.absence_type}</span>
+                          <span>{ABSENCE_TYPE_LABELS[request.absence_type as keyof typeof ABSENCE_TYPE_LABELS] || request.absence_type}</span>
                           <span>•</span>
                           <span>{request.total_days} dias</span>
                           <span>•</span>
@@ -178,7 +193,7 @@ export default async function TimeOffPage() {
                           <p className="text-sm mt-1 italic text-muted-foreground">"{request.employee_comment}"</p>
                         )}
                       </div>
-                      <ApprovalActions requestId={request.id} userRole={profile.role} />
+                      <ApprovalActions requestId={request.id} userRole={profile!.role} />
                     </div>
                   ))}
                 </div>
@@ -192,7 +207,6 @@ export default async function TimeOffPage() {
         </div>
       )}
 
-      {/* Requests List */}
       {profile?.role !== "admin_rrhh" && (
         <Card>
           <CardHeader>
@@ -209,9 +223,7 @@ export default async function TimeOffPage() {
                         <Palmtree className="h-5 w-5 text-primary" />
                       </div>
                       <div>
-                        <p className="font-medium">
-                          {ABSENCE_TYPE_LABELS[request.absence_type]}
-                        </p>
+                        <p className="font-medium">{ABSENCE_TYPE_LABELS[request.absence_type]}</p>
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
                           <Calendar className="h-3 w-3" />
                           <span>

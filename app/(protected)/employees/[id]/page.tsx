@@ -1,4 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
+import { requireAuth } from "@/lib/auth-utils";
+import { prisma } from "@/lib/prisma";
 import { notFound, redirect } from "next/navigation";
 import { ProfileHeader } from "@/components/profiles/profile-header";
 import { DocumentList } from "@/components/documents/document-list";
@@ -7,48 +8,65 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { getEmployeeDocuments } from "@/lib/actions/documents";
-import { User, FileText, History, ShieldCheck } from "lucide-react";
+import { User, FileText, ShieldCheck } from "lucide-react";
 import type { Profile, Area, EmployeeDocument } from "@/lib/types";
 
 export default async function EmployeeDetailPage({ params }: { params: { id: string } }) {
     const { id } = await params;
-    const supabase = await createClient();
+    const sessionUser = await requireAuth();
 
-    const { data: { user: currentUser } } = await supabase.auth.getUser();
-    if (!currentUser) redirect("/login");
-
-    // Fetch current user role to check permissions
-    const { data: currentUserProfile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", currentUser.id)
-        .single();
+    const currentUserProfile = await prisma.user.findUnique({
+        where: { id: sessionUser.id },
+        select: { role: true },
+    });
 
     if (currentUserProfile?.role === "empleado") {
         redirect("/dashboard");
     }
 
-    const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", id)
-        .single() as { data: Profile | null };
+    const profileRaw = await prisma.user.findUnique({
+        where: { id },
+    });
 
-    if (!profile) notFound();
+    if (!profileRaw) notFound();
 
-    const { data: area } = profile.area_id
-        ? await supabase.from("areas").select("*").eq("id", profile.area_id).single()
-        : { data: null };
+    const profile: Profile = {
+        id: profileRaw.id,
+        email: profileRaw.email,
+        full_name: profileRaw.full_name,
+        role: profileRaw.role as Profile["role"],
+        area_id: profileRaw.area_id,
+        position: profileRaw.position,
+        hire_date: profileRaw.hire_date?.toISOString().split("T")[0] ?? null,
+        birth_date: profileRaw.birth_date?.toISOString().split("T")[0] ?? null,
+        avatar_url: profileRaw.avatar_url,
+        is_active: profileRaw.is_active,
+        created_at: profileRaw.created_at.toISOString(),
+        updated_at: profileRaw.updated_at.toISOString(),
+    };
 
-    // Jefe can only see their team
+    const areaRaw = profile.area_id
+        ? await prisma.area.findUnique({ where: { id: profile.area_id } })
+        : null;
+
+    const area: Area | null = areaRaw
+        ? {
+            id: areaRaw.id,
+            name: areaRaw.name,
+            description: areaRaw.description,
+            jefe_area_id: areaRaw.jefe_area_id,
+            created_at: areaRaw.created_at.toISOString(),
+            updated_at: areaRaw.updated_at.toISOString(),
+        }
+        : null;
+
     if (currentUserProfile?.role === "jefe_area" && profile.area_id) {
-        const { data: targetArea } = await supabase
-            .from("areas")
-            .select("jefe_area_id")
-            .eq("id", profile.area_id)
-            .single();
+        const targetArea = await prisma.area.findUnique({
+            where: { id: profile.area_id },
+            select: { jefe_area_id: true },
+        });
 
-        if (targetArea?.jefe_area_id !== user.id) {
+        if (targetArea?.jefe_area_id !== sessionUser.id) {
             redirect("/employees");
         }
     }
@@ -58,7 +76,7 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
 
     return (
         <div className="p-6 lg:p-8 space-y-8">
-            <ProfileHeader profile={profile} area={area as Area | null} />
+            <ProfileHeader profile={profile} area={area} />
 
             <Tabs defaultValue="documents" className="w-full">
                 <TabsList className="grid w-full max-w-md grid-cols-3">

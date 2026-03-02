@@ -4,7 +4,7 @@ import React from "react"
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { createOnboardingProcess, getActiveEmployees } from "@/app/actions/onboarding-actions";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,23 +51,15 @@ export default function NewOnboardingPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
-  const supabase = createClient();
 
   useEffect(() => {
     const fetchEmployees = async () => {
-      const { data } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("is_active", true)
-        .order("full_name");
-      
-      if (data) {
-        setEmployees(data as Profile[]);
-      }
+      const data = await getActiveEmployees();
+      setEmployees(data as Profile[]);
     };
 
     fetchEmployees();
-  }, [supabase]);
+  }, []);
 
   const addDefaultTasks = () => {
     const newTasks = DEFAULT_TASKS.map((task) => ({
@@ -103,7 +95,7 @@ export default function NewOnboardingPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!selectedEmployee || !startDate) {
       setError("Por favor selecciona un empleado y fecha de inicio");
       return;
@@ -112,59 +104,26 @@ export default function NewOnboardingPage() {
     setIsLoading(true);
     setError(null);
 
-    const { data: { user } } = await supabase.auth.getUser();
-    
-    if (!user) {
-      setError("Debes iniciar sesion");
-      setIsLoading(false);
-      return;
-    }
-
-    // Create onboarding process
-    const { data: onboarding, error: onboardingError } = await supabase
-      .from("onboarding_processes")
-      .insert({
-        employee_id: selectedEmployee,
-        start_date: startDate,
-        expected_completion_date: expectedDate || null,
-        notes: notes || null,
-        created_by: user.id,
-        status: "activo",
-      })
-      .select()
-      .single();
-
-    if (onboardingError) {
-      setError(onboardingError.message);
-      setIsLoading(false);
-      return;
-    }
-
-    // Create tasks
-    if (tasks.length > 0) {
-      const tasksToInsert = tasks
+    const result = await createOnboardingProcess({
+      employee_id: selectedEmployee,
+      start_date: startDate,
+      expected_completion_date: expectedDate || null,
+      notes: notes || null,
+      tasks: tasks
         .filter((t) => t.title)
         .map((task) => ({
-          onboarding_id: onboarding.id,
           title: task.title,
-          description: task.description || null,
           category: task.category,
+          description: task.description || null,
           due_date: task.due_date || null,
           responsible_id: task.responsible_id || null,
-          status: "pendiente",
-        }));
+        })),
+    });
 
-      if (tasksToInsert.length > 0) {
-        const { error: tasksError } = await supabase
-          .from("onboarding_tasks")
-          .insert(tasksToInsert);
-
-        if (tasksError) {
-          setError(tasksError.message);
-          setIsLoading(false);
-          return;
-        }
-      }
+    if (result.error) {
+      setError(result.error);
+      setIsLoading(false);
+      return;
     }
 
     router.push("/onboarding");

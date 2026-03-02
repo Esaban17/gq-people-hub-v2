@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { logoutAction } from "@/app/actions/auth-actions";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import type { Profile } from "@/lib/types";
@@ -26,23 +26,57 @@ interface AppSidebarProps {
 }
 
 const navItems = [
-  { href: "/dashboard", label: "Inicio", icon: Home, roles: ["admin_rrhh", "jefe_area", "empleado"] },
-  { href: "/profile", label: "Mi Perfil", icon: Users, roles: ["admin_rrhh", "jefe_area", "empleado"] },
-  { href: "/employees", label: "Empleados", icon: Users, roles: ["admin_rrhh", "jefe_area"] },
-  { href: "/time-off", label: "Vacaciones", icon: Palmtree, roles: ["admin_rrhh", "jefe_area", "empleado"] },
-  { href: "/calendar", label: "Calendario", icon: Calendar, roles: ["admin_rrhh", "jefe_area", "empleado"] },
-  { href: "/onboarding", label: "Onboarding", icon: UserPlus, roles: ["admin_rrhh", "jefe_area"] },
-  { href: "/admin/settings", label: "Configuracion", icon: Settings, roles: ["admin_rrhh"] },
+  {
+    href: "/dashboard",
+    label: "Inicio",
+    icon: Home,
+    roles: ["admin_rrhh", "jefe_area", "empleado"],
+  },
+  {
+    href: "/profile",
+    label: "Mi Perfil",
+    icon: Users,
+    roles: ["admin_rrhh", "jefe_area", "empleado"],
+  },
+  {
+    href: "/employees",
+    label: "Empleados",
+    icon: Users,
+    roles: ["admin_rrhh", "jefe_area"],
+  },
+  {
+    href: "/time-off",
+    label: "Vacaciones",
+    icon: Palmtree,
+    roles: ["admin_rrhh", "jefe_area", "empleado"],
+  },
+  {
+    href: "/calendar",
+    label: "Calendario",
+    icon: Calendar,
+    roles: ["admin_rrhh", "jefe_area", "empleado"],
+  },
+  {
+    href: "/onboarding",
+    label: "Onboarding",
+    icon: UserPlus,
+    roles: ["admin_rrhh", "jefe_area"],
+  },
+  {
+    href: "/admin/settings",
+    label: "Configuracion",
+    icon: Settings,
+    roles: ["admin_rrhh"],
+  },
 ];
 
 export function AppSidebar({ user }: AppSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const supabase = createClient();
   const [collapsed, setCollapsed] = useState(false);
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    await logoutAction();
     router.push("/login");
     router.refresh();
   };
@@ -79,13 +113,18 @@ export function AppSidebar({ user }: AppSidebarProps) {
             collapsed && "mx-auto"
           )}
         >
-          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+          {collapsed ? (
+            <ChevronRight className="h-4 w-4" />
+          ) : (
+            <ChevronLeft className="h-4 w-4" />
+          )}
         </Button>
       </div>
 
       <nav className="flex-1 p-2 space-y-1">
         {filteredNavItems.map((item) => {
-          const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+          const isActive =
+            pathname === item.href || pathname.startsWith(item.href + "/");
           return (
             <Link
               key={item.href}
@@ -108,7 +147,9 @@ export function AppSidebar({ user }: AppSidebarProps) {
         {!collapsed && user && (
           <div className="mb-3 px-2">
             <p className="font-medium text-sm truncate">{user.full_name}</p>
-            <p className="text-xs text-sidebar-foreground/70">{ROLE_LABELS[user.role]}</p>
+            <p className="text-xs text-sidebar-foreground/70">
+              {ROLE_LABELS[user.role]}
+            </p>
           </div>
         )}
         <Button

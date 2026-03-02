@@ -1,20 +1,16 @@
-import { createClient } from "@/lib/supabase/server";
+import { requireAuth } from "@/lib/auth-utils";
+import { prisma } from "@/lib/prisma";
 import { redirect, notFound } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import type { Profile, OnboardingProcess, OnboardingTask } from "@/lib/types";
+import type { OnboardingTask } from "@/lib/types";
 import { TASK_STATUS_LABELS } from "@/lib/types";
 import { ArrowLeft, UserPlus, CheckCircle, Clock, AlertCircle, Calendar, Mail, Briefcase } from "lucide-react";
 import Link from "next/link";
 import { TaskStatusToggle } from "@/components/onboarding/task-status-toggle";
-
-interface OnboardingWithDetails extends OnboardingProcess {
-    profiles: Profile;
-    onboarding_tasks: (OnboardingTask & { responsible: { full_name: string } | null })[];
-}
 
 const TASK_CATEGORY_LABELS_LOCAL: Record<string, string> = {
     rrhh: "Recursos Humanos",
@@ -28,38 +24,68 @@ export default async function OnboardingDetailPage({
     params: Promise<{ id: string }>;
 }) {
     const { id } = await params;
-    const supabase = await createClient();
+    const sessionUser = await requireAuth();
 
-    const { data: { user } } = await supabase.auth.getUser();
+    const profile = await prisma.user.findUnique({
+        where: { id: sessionUser.id },
+        select: { role: true },
+    });
 
-    if (!user) {
-        redirect("/login");
-    }
+    const processRaw = await prisma.onboardingProcess.findUnique({
+        where: { id },
+        include: {
+            employee: true,
+            tasks: {
+                include: {
+                    responsible: { select: { full_name: true } },
+                },
+            },
+        },
+    });
 
-    const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.id)
-        .single() as { data: Profile | null };
-
-    const { data: process } = await supabase
-        .from("onboarding_processes")
-        .select(`
-      *,
-      profiles!onboarding_processes_employee_id_fkey(*),
-      onboarding_tasks(*, responsible:profiles!onboarding_tasks_responsible_id_fkey(full_name))
-    `)
-        .eq("id", id)
-        .single() as { data: OnboardingWithDetails | null };
-
-    if (!process) {
+    if (!processRaw) {
         notFound();
     }
 
     // Check permissions
-    if (profile?.role === "empleado" && process.employee_id !== user.id) {
+    if (profile?.role === "empleado" && processRaw.employee_id !== sessionUser.id) {
         redirect("/dashboard");
     }
+
+    const process = {
+        id: processRaw.id,
+        employee_id: processRaw.employee_id,
+        start_date: processRaw.start_date.toISOString().split("T")[0],
+        expected_completion_date: processRaw.expected_completion_date?.toISOString().split("T")[0] ?? null,
+        status: processRaw.status,
+        notes: processRaw.notes,
+        created_by: processRaw.created_by,
+        created_at: processRaw.created_at.toISOString(),
+        updated_at: processRaw.updated_at.toISOString(),
+        profiles: {
+            id: processRaw.employee.id,
+            email: processRaw.employee.email,
+            full_name: processRaw.employee.full_name,
+            role: processRaw.employee.role,
+            area_id: processRaw.employee.area_id,
+            position: processRaw.employee.position,
+            avatar_url: processRaw.employee.avatar_url,
+        },
+        onboarding_tasks: processRaw.tasks.map((t) => ({
+            id: t.id,
+            onboarding_id: t.onboarding_id,
+            title: t.title,
+            description: t.description,
+            category: t.category as OnboardingTask["category"],
+            status: t.status as OnboardingTask["status"],
+            responsible_id: t.responsible_id,
+            due_date: t.due_date?.toISOString().split("T")[0] ?? null,
+            completed_at: t.completed_at?.toISOString() ?? null,
+            created_at: t.created_at.toISOString(),
+            updated_at: t.updated_at.toISOString(),
+            responsible: t.responsible ? { full_name: t.responsible.full_name } : null,
+        })),
+    };
 
     const getStatusColor = (status: string) => {
         switch (status) {
@@ -101,7 +127,7 @@ export default async function OnboardingDetailPage({
     }, {} as Record<string, typeof tasks>);
 
     const canEditTasks = profile?.role === "admin_rrhh" ||
-        tasks.some(t => t.responsible_id === user.id);
+        tasks.some(t => t.responsible_id === sessionUser.id);
 
     return (
         <div className="p-6 lg:p-8 space-y-6">

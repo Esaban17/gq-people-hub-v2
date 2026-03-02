@@ -1,63 +1,52 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { requireAuth } from "@/lib/auth-utils";
+import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import type { AbsenceType, RequestStatus } from "@/lib/generated/prisma";
 
 export async function approveRequest(requestId: string, currentRole: string) {
-    const supabase = await createClient();
+    const sessionUser = await requireAuth();
 
-    // Determine next status
     let nextStatus: string = "aprobada";
     if (currentRole === "jefe_area") {
         nextStatus = "pendiente_rrhh";
     }
 
-    // Get request details first
-    const { data: request, error: fetchError } = await supabase
-        .from("time_off_requests")
-        .select("user_id, total_days, absence_type")
-        .eq("id", requestId)
-        .single();
+    const request = await prisma.timeOffRequest.findUnique({
+        where: { id: requestId },
+        select: { user_id: true, total_days: true, absence_type: true },
+    });
 
-    if (fetchError || !request) {
-        throw new Error("Error fetching request: " + fetchError?.message);
+    if (!request) {
+        throw new Error("Solicitud no encontrada");
     }
 
-    // Update request status
-    const { error } = await supabase
-        .from("time_off_requests")
-        .update({
-            status: nextStatus as any,
-            approved_by: (await supabase.auth.getUser()).data.user?.id,
-            approved_at: new Date().toISOString()
-        })
-        .eq("id", requestId);
+    await prisma.timeOffRequest.update({
+        where: { id: requestId },
+        data: {
+            status: nextStatus as RequestStatus,
+            approved_by: sessionUser.id,
+            approved_at: new Date(),
+        },
+    });
 
-    if (error) {
-        throw new Error(error.message);
-    }
-
-    // If fully approved (by RRHH), deduct from balance
     if (nextStatus === "aprobada" && request.absence_type === "vacaciones") {
-        // Get current balance
         const currentYear = new Date().getFullYear();
-        const { data: balance } = await supabase
-            .from("time_off_balances")
-            .select("id, used_days")
-            .eq("user_id", request.user_id)
-            .eq("year", currentYear)
-            .single();
+        const balance = await prisma.timeOffBalance.findFirst({
+            where: {
+                user_id: request.user_id,
+                year: currentYear,
+            },
+        });
 
         if (balance) {
-            const newUsed = (balance.used_days || 0) + request.total_days;
-
-            await supabase
-                .from("time_off_balances")
-                .update({
-                    used_days: newUsed,
-                    updated_at: new Date().toISOString()
-                })
-                .eq("id", balance.id);
+            await prisma.timeOffBalance.update({
+                where: { id: balance.id },
+                data: {
+                    used_days: (balance.used_days || 0) + request.total_days,
+                },
+            });
         }
     }
 
@@ -66,20 +55,60 @@ export async function approveRequest(requestId: string, currentRole: string) {
 }
 
 export async function rejectRequest(requestId: string, comment?: string) {
-    const supabase = await createClient();
+    await requireAuth();
 
-    const { error } = await supabase
-        .from("time_off_requests")
-        .update({
-            status: "rechazada" as any,
-            approver_comment: comment || null
-        })
-        .eq("id", requestId);
-
-    if (error) {
-        throw new Error(error.message);
-    }
+    await prisma.timeOffRequest.update({
+        where: { id: requestId },
+        data: {
+            status: "rechazada",
+            approver_comment: comment || null,
+        },
+    });
 
     revalidatePath("/time-off");
     revalidatePath("/dashboard");
+}
+
+export async function createTimeOffRequest(data: {
+    absence_type: string;
+    start_date: string;
+    end_date: string;
+    total_days: number;
+    status: string;
+    employee_comment: string | null;
+}) {
+    const sessionUser = await requireAuth();
+
+    const profile = await prisma.user.findUnique({
+        where: { id: sessionUser.id },
+        select: { role: true },
+    });
+
+    if (profile?.role === "admin_rrhh") {
+        return { error: "Los administradores de RRHH no pueden solicitar vacaciones." };
+    }
+
+    let finalStatus = data.status;
+    if (data.status === "enviada") {
+        finalStatus = profile?.role === "jefe_area" ? "pendiente_rrhh" : "pendiente_jefe";
+    }
+
+    try {
+        await prisma.timeOffRequest.create({
+            data: {
+                user_id: sessionUser.id,
+                absence_type: data.absence_type as AbsenceType,
+                start_date: new Date(data.start_date),
+                end_date: new Date(data.end_date),
+                total_days: data.total_days,
+                status: finalStatus as RequestStatus,
+                employee_comment: data.employee_comment,
+            },
+        });
+
+        revalidatePath("/time-off");
+        return { success: true };
+    } catch (err: any) {
+        return { error: err.message };
+    }
 }

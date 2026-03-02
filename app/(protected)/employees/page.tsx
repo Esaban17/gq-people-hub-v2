@@ -1,25 +1,16 @@
-import { createClient } from "@/lib/supabase/server";
+import { requireAuth } from "@/lib/auth-utils";
+import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { EmployeesView } from "@/components/employees/employees-view";
-import { Profile, Area } from "@/lib/types";
+import type { Profile, Area } from "@/lib/types";
 
 export default async function EmployeesPage() {
-    const supabase = await createClient();
+    const sessionUser = await requireAuth();
 
-    const {
-        data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-        return redirect("/login");
-    }
-
-    // Fetch user profile to check role
-    const { data: userProfile } = await supabase
-        .from("profiles")
-        .select("role, area_id")
-        .eq("id", user.id)
-        .single();
+    const userProfile = await prisma.user.findUnique({
+        where: { id: sessionUser.id },
+        select: { role: true, area_id: true },
+    });
 
     if (!userProfile) {
         return redirect("/login");
@@ -27,37 +18,48 @@ export default async function EmployeesPage() {
 
     const { role } = userProfile;
 
-    // Only Admin RRHH and Jefe de Area can access this page
     if (role !== "admin_rrhh" && role !== "jefe_area") {
         return redirect("/dashboard");
     }
 
-    // Fetch all employees (base query)
-    let { data: employees } = await supabase
-        .from("profiles")
-        .select("*")
-        .order("full_name") as { data: Profile[] | null };
+    const employeesRaw = await prisma.user.findMany({
+        orderBy: { full_name: "asc" },
+    });
 
-    // Fetch all areas
-    let { data: areas } = await supabase
-        .from("areas")
-        .select("*")
-        .order("name") as { data: Area[] | null };
+    const areasRaw = await prisma.area.findMany({
+        orderBy: { name: "asc" },
+    });
 
-    if (!employees) employees = [];
-    if (!areas) areas = [];
+    let employees: Profile[] = employeesRaw.map((e) => ({
+        id: e.id,
+        email: e.email,
+        full_name: e.full_name,
+        role: e.role as Profile["role"],
+        area_id: e.area_id,
+        position: e.position,
+        hire_date: e.hire_date?.toISOString().split("T")[0] ?? null,
+        birth_date: e.birth_date?.toISOString().split("T")[0] ?? null,
+        avatar_url: e.avatar_url,
+        is_active: e.is_active,
+        created_at: e.created_at.toISOString(),
+        updated_at: e.updated_at.toISOString(),
+    }));
 
-    // Filter for Jefe de Area
+    let areas: Area[] = areasRaw.map((a) => ({
+        id: a.id,
+        name: a.name,
+        description: a.description,
+        jefe_area_id: a.jefe_area_id,
+        created_at: a.created_at.toISOString(),
+        updated_at: a.updated_at.toISOString(),
+    }));
+
     if (role === "jefe_area") {
         if (!userProfile.area_id) {
-            // If jefe has no area assigned, they technically see nothing or should see an error.
-            // For now, return empty list to be safe.
             employees = [];
             areas = [];
         } else {
-            // Filter employees to only those in the same area
             employees = employees.filter(e => e.area_id === userProfile.area_id);
-            // Filter areas to only their area (so org chart is focused)
             areas = areas.filter(a => a.id === userProfile.area_id);
         }
     }

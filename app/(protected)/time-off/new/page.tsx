@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { createTimeOffRequest } from "@/lib/actions/time-off";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,7 +23,6 @@ export default function NewTimeOffRequestPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
-  const supabase = createClient();
 
   const calculateDays = () => {
     if (!startDate || !endDate) return 0;
@@ -48,49 +47,19 @@ export default function NewTimeOffRequestPage() {
     setIsLoading(true);
     setError(null);
 
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
-      setError("Debes iniciar sesion");
-      setIsLoading(false);
-      return;
-    }
-
-    // Fetch profile to check role
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .single();
-
-    if (profile?.role === "admin_rrhh") {
-      setError("Los administradores de RRHH no pueden solicitar vacaciones.");
-      setIsLoading(false);
-      return;
-    }
-
     const totalDays = calculateDays();
 
-    // Determine initial status if sending
-    let finalStatus: string = status;
-    if (status === "enviada") {
-      finalStatus = profile?.role === "jefe_area" ? "pendiente_rrhh" : "pendiente_jefe";
-    }
+    const result = await createTimeOffRequest({
+      absence_type: absenceType,
+      start_date: startDate,
+      end_date: endDate,
+      total_days: totalDays,
+      status,
+      employee_comment: comment || null,
+    });
 
-    const { error: insertError } = await supabase
-      .from("time_off_requests")
-      .insert({
-        user_id: user.id,
-        absence_type: absenceType,
-        start_date: startDate,
-        end_date: endDate,
-        total_days: totalDays,
-        status: finalStatus as any,
-        employee_comment: comment || null,
-      });
-
-    if (insertError) {
-      setError(insertError.message);
+    if (result.error) {
+      setError(result.error);
       setIsLoading(false);
     } else {
       router.push("/time-off");

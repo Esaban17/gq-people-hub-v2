@@ -1,4 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
+import { requireAuth } from "@/lib/auth-utils";
+import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { ProfileHeader } from "@/components/profiles/profile-header";
 import { DocumentList } from "@/components/documents/document-list";
@@ -9,28 +10,49 @@ import { User, FileText, Settings } from "lucide-react";
 import type { Profile, Area, EmployeeDocument } from "@/lib/types";
 
 export default async function ProfilePage() {
-    const supabase = await createClient();
+    const sessionUser = await requireAuth();
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) redirect("/login");
+    const profileRaw = await prisma.user.findUnique({
+        where: { id: sessionUser.id },
+    });
 
-    const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.id)
-        .single() as { data: Profile | null };
+    if (!profileRaw) redirect("/dashboard");
 
-    if (!profile) redirect("/dashboard");
+    const profile: Profile = {
+        id: profileRaw.id,
+        email: profileRaw.email,
+        full_name: profileRaw.full_name,
+        role: profileRaw.role as Profile["role"],
+        area_id: profileRaw.area_id,
+        position: profileRaw.position,
+        hire_date: profileRaw.hire_date?.toISOString().split("T")[0] ?? null,
+        birth_date: profileRaw.birth_date?.toISOString().split("T")[0] ?? null,
+        avatar_url: profileRaw.avatar_url,
+        is_active: profileRaw.is_active,
+        created_at: profileRaw.created_at.toISOString(),
+        updated_at: profileRaw.updated_at.toISOString(),
+    };
 
-    const { data: area } = profile.area_id
-        ? await supabase.from("areas").select("*").eq("id", profile.area_id).single()
-        : { data: null };
+    const areaRaw = profile.area_id
+        ? await prisma.area.findUnique({ where: { id: profile.area_id } })
+        : null;
 
-    const documents = await getEmployeeDocuments(user.id) as EmployeeDocument[];
+    const area: Area | null = areaRaw
+        ? {
+            id: areaRaw.id,
+            name: areaRaw.name,
+            description: areaRaw.description,
+            jefe_area_id: areaRaw.jefe_area_id,
+            created_at: areaRaw.created_at.toISOString(),
+            updated_at: areaRaw.updated_at.toISOString(),
+        }
+        : null;
+
+    const documents = await getEmployeeDocuments(sessionUser.id) as EmployeeDocument[];
 
     return (
         <div className="p-6 lg:p-8 space-y-8">
-            <ProfileHeader profile={profile} area={area as Area | null} />
+            <ProfileHeader profile={profile} area={area} />
 
             <Tabs defaultValue="info" className="w-full">
                 <TabsList className="grid w-full max-w-md grid-cols-3">
@@ -99,7 +121,7 @@ export default async function ProfilePage() {
                             <p className="text-sm text-muted-foreground">Gestiona tus contratos y documentos oficiales.</p>
                         </div>
                     </div>
-                    <DocumentList documents={documents} userId={user.id} />
+                    <DocumentList documents={documents} userId={sessionUser.id} />
                 </TabsContent>
 
                 <TabsContent value="settings" className="pt-4">

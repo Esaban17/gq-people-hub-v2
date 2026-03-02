@@ -4,8 +4,7 @@ import { useState, useRef, useTransition } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Camera, Loader2 } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
-import { updateProfileAvatar } from "@/app/actions/profile-actions";
+import { uploadAvatarAction } from "@/app/actions/profile-actions";
 import { toast } from "sonner";
 
 interface AvatarUploadProps {
@@ -18,7 +17,6 @@ export function AvatarUpload({ userId, currentAvatarUrl, fullName }: AvatarUploa
     const [isPending, startTransition] = useTransition();
     const [previewUrl, setPreviewUrl] = useState<string | null>(currentAvatarUrl);
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const supabase = createClient();
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -43,35 +41,19 @@ export function AvatarUpload({ userId, currentAvatarUrl, fullName }: AvatarUploa
         };
         reader.readAsDataURL(file);
 
-        // Upload to Supabase Storage
+        // Upload via server action
         startTransition(async () => {
-            const fileExt = file.name.split(".").pop();
-            const fileName = `${userId}/avatar.${fileExt}`;
+            const formData = new FormData();
+            formData.append("file", file);
 
-            const { error: uploadError } = await supabase.storage
-                .from("avatars")
-                .upload(fileName, file, {
-                    cacheControl: "3600",
-                    upsert: true,
-                    contentType: file.type,
-                });
-
-            if (uploadError) {
-                toast.error("Error subiendo la imagen: " + uploadError.message);
-                return;
-            }
-
-            // Get public URL
-            const { data: { publicUrl } } = supabase.storage
-                .from("avatars")
-                .getPublicUrl(fileName);
-
-            // Update profile with new avatar URL
-            const result = await updateProfileAvatar(publicUrl);
+            const result = await uploadAvatarAction(formData);
 
             if (result.error) {
                 toast.error(result.error);
             } else {
+                if (result.url) {
+                    setPreviewUrl(result.url);
+                }
                 toast.success("Foto de perfil actualizada");
             }
         });

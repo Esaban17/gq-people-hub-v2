@@ -1,47 +1,44 @@
 "use server";
-import { createClient } from "@/lib/supabase/server";
+
+import { requireAuth } from "@/lib/auth-utils";
+import { prisma } from "@/lib/prisma";
+import { uploadToS3, deleteFromS3, getSignedDownloadUrl } from "@/lib/s3";
 import { revalidatePath } from "next/cache";
-import { DocumentCategory } from "@/lib/types";
+import type { DocumentCategory } from "@/lib/generated/prisma";
 
 export async function uploadDocument(
     userId: string,
     name: string,
-    category: DocumentCategory,
+    category: string,
     file: File
 ) {
-    const supabase = await createClient();
+    const sessionUser = await requireAuth();
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error("No autenticado");
-
-    // Create path: [userId]/[timestamp]_[filename]
     const timestamp = Date.now();
-    const filePath = `${userId}/${timestamp}_${file.name}`;
+    const filePath = `documents/${userId}/${timestamp}_${file.name}`;
+    const buffer = Buffer.from(await file.arrayBuffer());
 
-    // 1. Upload to Storage
-    const { error: uploadError } = await supabase.storage
-        .from("employee-documents")
-        .upload(filePath, file);
+    try {
+        await uploadToS3(filePath, buffer, file.type);
+    } catch (err: any) {
+        throw new Error("Error subiendo el archivo: " + err.message);
+    }
 
-    if (uploadError) throw uploadError;
-
-    // 2. Insert into Database
-    const { error: dbError } = await supabase
-        .from("employee_documents")
-        .insert({
-            user_id: userId,
-            name: name,
-            file_path: filePath,
-            category: category,
-            uploaded_by: user.id,
-            size_bytes: file.size,
-            mime_type: file.type,
+    try {
+        await prisma.employeeDocument.create({
+            data: {
+                user_id: userId,
+                name: name,
+                file_path: filePath,
+                category: category as DocumentCategory,
+                uploaded_by: sessionUser.id,
+                size_bytes: file.size,
+                mime_type: file.type,
+            },
         });
-
-    if (dbError) {
-        // Cleanup storage if DB fails
-        await supabase.storage.from("employee-documents").remove([filePath]);
-        throw dbError;
+    } catch (err: any) {
+        await deleteFromS3(filePath);
+        throw new Error("Error guardando el documento: " + err.message);
     }
 
     revalidatePath(`/profile`);
@@ -49,45 +46,32 @@ export async function uploadDocument(
 }
 
 export async function deleteDocument(id: string, filePath: string, userId: string) {
-    const supabase = await createClient();
+    await requireAuth();
 
-    // 1. Remove from Storage
-    const { error: storageError } = await supabase.storage
-        .from("employee-documents")
-        .remove([filePath]);
+    await deleteFromS3(filePath);
 
-    if (storageError) throw storageError;
-
-    // 2. Remove from Database
-    const { error: dbError } = await supabase
-        .from("employee_documents")
-        .delete()
-        .eq("id", id);
-
-    if (dbError) throw dbError;
+    await prisma.employeeDocument.delete({
+        where: { id },
+    });
 
     revalidatePath(`/profile`);
     revalidatePath(`/employees/${userId}`);
 }
 
 export async function getEmployeeDocuments(userId: string) {
-    const supabase = await createClient();
-    const { data, error } = await supabase
-        .from("employee_documents")
-        .select("*")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false });
+    const documents = await prisma.employeeDocument.findMany({
+        where: { user_id: userId },
+        orderBy: { created_at: "desc" },
+    });
 
-    if (error) throw error;
-    return data;
+    return documents.map((doc) => ({
+        ...doc,
+        created_at: doc.created_at.toISOString(),
+        updated_at: doc.updated_at.toISOString(),
+    }));
 }
 
 export async function getDownloadUrl(filePath: string) {
-    const supabase = await createClient();
-    const { data, error } = await supabase.storage
-        .from("employee-documents")
-        .createSignedUrl(filePath, 3600);
-
-    if (error) throw error;
-    return data.signedUrl;
+    await requireAuth();
+    return getSignedDownloadUrl(filePath, 3600);
 }

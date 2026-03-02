@@ -1,44 +1,57 @@
-import { createClient } from "@/lib/supabase/server";
-import { redirect } from "next/navigation";
+import { requireAuth } from "@/lib/auth-utils";
+import { prisma } from "@/lib/prisma";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import type { TimeOffRequest, Profile } from "@/lib/types";
+import type { TimeOffRequest } from "@/lib/types";
 import { ABSENCE_TYPE_LABELS } from "@/lib/types";
 import { CalendarDays } from "lucide-react";
 
 export default async function CalendarPage() {
-  const supabase = await createClient();
-  
-  const { data: { user } } = await supabase.auth.getUser();
-  
-  if (!user) {
-    redirect("/login");
-  }
+  const sessionUser = await requireAuth();
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .single() as { data: Profile | null };
+  const profile = await prisma.user.findUnique({
+    where: { id: sessionUser.id },
+    select: { role: true },
+  });
 
   // Get approved requests for the current month
   const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
-  const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-  let requestsQuery = supabase
-    .from("time_off_requests")
-    .select("*, profiles!time_off_requests_user_id_fkey(full_name, email)")
-    .eq("status", "aprobada")
-    .gte("end_date", startOfMonth)
-    .lte("start_date", endOfMonth);
+  const whereClause: any = {
+    status: "aprobada",
+    end_date: { gte: startOfMonth },
+    start_date: { lte: endOfMonth },
+  };
 
-  // Admin sees all, others see only their area or own
   if (profile?.role !== "admin_rrhh") {
-    requestsQuery = requestsQuery.eq("user_id", user.id);
+    whereClause.user_id = sessionUser.id;
   }
 
-  const { data: approvedRequests } = await requestsQuery as { data: (TimeOffRequest & { profiles: { full_name: string; email: string } })[] | null };
+  const requestsRaw = await prisma.timeOffRequest.findMany({
+    where: whereClause,
+    include: {
+      user: { select: { full_name: true, email: true } },
+    },
+  });
+
+  const approvedRequests = requestsRaw.map((r) => ({
+    id: r.id,
+    user_id: r.user_id,
+    absence_type: r.absence_type as TimeOffRequest["absence_type"],
+    start_date: r.start_date.toISOString().split("T")[0],
+    end_date: r.end_date.toISOString().split("T")[0],
+    total_days: r.total_days,
+    status: r.status as TimeOffRequest["status"],
+    employee_comment: r.employee_comment,
+    approver_comment: r.approver_comment,
+    approved_by: r.approved_by,
+    approved_at: r.approved_at?.toISOString() ?? null,
+    created_at: r.created_at.toISOString(),
+    updated_at: r.updated_at.toISOString(),
+    profiles: { full_name: r.user.full_name, email: r.user.email },
+  }));
 
   const monthNames = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -64,7 +77,6 @@ export default async function CalendarPage() {
   }
 
   const getRequestsForDay = (day: number) => {
-    if (!approvedRequests) return [];
     const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
     return approvedRequests.filter((req) => {
       return dateStr >= req.start_date && dateStr <= req.end_date;
@@ -174,7 +186,7 @@ export default async function CalendarPage() {
           <CardDescription>Ausencias aprobadas este mes</CardDescription>
         </CardHeader>
         <CardContent>
-          {approvedRequests && approvedRequests.length > 0 ? (
+          {approvedRequests.length > 0 ? (
             <div className="space-y-3">
               {approvedRequests.map((request) => (
                 <div

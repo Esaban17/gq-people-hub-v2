@@ -1,0 +1,221 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// ─── ENUMS ───────────────────────────────────────────────
+
+enum UserRole {
+  admin_rrhh
+  jefe_area
+  empleado
+}
+
+enum RequestStatus {
+  borrador
+  enviada
+  pendiente_jefe
+  pendiente_rrhh
+  aprobada
+  rechazada
+  cancelada
+}
+
+enum AbsenceType {
+  vacaciones
+  dia_personal
+  enfermedad
+}
+
+enum TaskStatus {
+  pendiente
+  en_progreso
+  completada
+}
+
+enum TaskCategory {
+  rrhh
+  it
+  jefe_area
+}
+
+enum DocumentCategory {
+  contrato
+  identificacion
+  fiscal
+  otro
+}
+
+// ─── MODELS ──────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password_hash String    @db.VarChar(255)
+  full_name     String    @db.VarChar(255)
+  role          UserRole  @default(empleado)
+  area_id       String?
+  position      String?   @db.VarChar(255)
+  hire_date     DateTime? @db.Date
+  birth_date    DateTime? @db.Date
+  avatar_url    String?   @db.Text
+  is_active     Boolean   @default(true)
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  area                    Area?               @relation("UserArea", fields: [area_id], references: [id])
+  managed_area            Area?               @relation("AreaManager")
+  time_off_requests       TimeOffRequest[]    @relation("UserRequests")
+  approved_requests       TimeOffRequest[]    @relation("ApprovedBy")
+  time_off_balances       TimeOffBalance[]
+  onboarding_as_employee  OnboardingProcess[] @relation("OnboardingEmployee")
+  onboarding_created      OnboardingProcess[] @relation("OnboardingCreator")
+  responsible_tasks       OnboardingTask[]    @relation("TaskResponsible")
+  documents               EmployeeDocument[]  @relation("DocumentOwner")
+  uploaded_documents      EmployeeDocument[]  @relation("DocumentUploader")
+  notifications           Notification[]
+
+  @@index([area_id])
+  @@index([role])
+  @@index([is_active])
+  @@map("users")
+}
+
+model Area {
+  id           String   @id @default(cuid())
+  name         String   @db.VarChar(255)
+  description  String?  @db.Text
+  jefe_area_id String?  @unique
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  jefe_area User?  @relation("AreaManager", fields: [jefe_area_id], references: [id])
+  users     User[] @relation("UserArea")
+
+  @@map("areas")
+}
+
+model TimeOffBalance {
+  id             String   @id @default(cuid())
+  user_id        String
+  year           Int
+  total_days     Int      @default(15)
+  used_days      Int      @default(0)
+  pending_days   Int      @default(0)
+  carryover_days Int      @default(0)
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, year])
+  @@index([user_id])
+  @@map("time_off_balances")
+}
+
+model TimeOffRequest {
+  id               String        @id @default(cuid())
+  user_id          String
+  absence_type     AbsenceType
+  start_date       DateTime      @db.Date
+  end_date         DateTime      @db.Date
+  total_days       Int
+  status           RequestStatus @default(borrador)
+  employee_comment String?       @db.Text
+  approver_comment String?       @db.Text
+  approved_by      String?
+  approved_at      DateTime?
+  created_at       DateTime      @default(now())
+  updated_at       DateTime      @updatedAt
+
+  user     User  @relation("UserRequests", fields: [user_id], references: [id], onDelete: Cascade)
+  approver User? @relation("ApprovedBy", fields: [approved_by], references: [id])
+
+  @@index([user_id])
+  @@index([status])
+  @@index([start_date, end_date])
+  @@map("time_off_requests")
+}
+
+model OnboardingProcess {
+  id                      String    @id @default(cuid())
+  employee_id             String
+  start_date              DateTime  @db.Date
+  expected_completion_date DateTime? @db.Date
+  status                  String    @default("activo") @db.VarChar(50)
+  notes                   String?   @db.Text
+  created_by              String?
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @updatedAt
+
+  employee User            @relation("OnboardingEmployee", fields: [employee_id], references: [id], onDelete: Cascade)
+  creator  User?           @relation("OnboardingCreator", fields: [created_by], references: [id])
+  tasks    OnboardingTask[]
+
+  @@index([employee_id])
+  @@index([status])
+  @@map("onboarding_processes")
+}
+
+model OnboardingTask {
+  id             String       @id @default(cuid())
+  onboarding_id  String
+  title          String       @db.VarChar(500)
+  description    String?      @db.Text
+  category       TaskCategory @default(rrhh)
+  responsible_id String?
+  due_date       DateTime?    @db.Date
+  status         TaskStatus   @default(pendiente)
+  comments       String?      @db.Text
+  completed_at   DateTime?
+  created_at     DateTime     @default(now())
+  updated_at     DateTime     @updatedAt
+
+  onboarding  OnboardingProcess @relation(fields: [onboarding_id], references: [id], onDelete: Cascade)
+  responsible User?             @relation("TaskResponsible", fields: [responsible_id], references: [id])
+
+  @@index([onboarding_id])
+  @@index([responsible_id])
+  @@index([status])
+  @@map("onboarding_tasks")
+}
+
+model EmployeeDocument {
+  id          String           @id @default(cuid())
+  user_id     String
+  name        String           @db.VarChar(500)
+  file_path   String           @db.VarChar(1000)
+  category    DocumentCategory @default(otro)
+  uploaded_by String
+  size_bytes  Int?
+  mime_type   String?          @db.VarChar(255)
+  created_at  DateTime         @default(now())
+  updated_at  DateTime         @updatedAt
+
+  user     User @relation("DocumentOwner", fields: [user_id], references: [id], onDelete: Cascade)
+  uploader User @relation("DocumentUploader", fields: [uploaded_by], references: [id])
+
+  @@index([user_id])
+  @@map("employee_documents")
+}
+
+model Notification {
+  id             String   @id @default(cuid())
+  user_id        String
+  title          String   @db.VarChar(500)
+  message        String   @db.Text
+  type           String   @db.VarChar(100)
+  reference_id   String?
+  reference_type String?  @db.VarChar(100)
+  is_read        Boolean  @default(false)
+  created_at     DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, is_read])
+  @@map("notifications")
+}

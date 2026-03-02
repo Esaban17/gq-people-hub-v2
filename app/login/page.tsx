@@ -1,15 +1,20 @@
 "use client";
 
-import React from "react"
-
+import React from "react";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { loginAction, registerAction } from "@/app/actions/auth-actions";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2 } from "lucide-react";
 
@@ -22,20 +27,16 @@ export default function LoginPage() {
   const [fullName, setFullName] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const router = useRouter();
-  const supabase = createClient();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    const result = await loginAction(email, password);
 
-    if (error) {
-      setError(error.message);
+    if (result.error) {
+      setError(result.error);
       setIsLoading(false);
     } else {
       router.push("/dashboard");
@@ -49,21 +50,16 @@ export default function LoginPage() {
     setError(null);
     setMessage(null);
 
-    const { error } = await supabase.auth.signUp({
+    const result = await registerAction({
       email,
       password,
-      options: {
-        emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL || window.location.origin,
-        data: {
-          full_name: fullName,
-        },
-      },
+      full_name: fullName,
     });
 
-    if (error) {
-      setError(error.message);
+    if (result.error) {
+      setError(result.error);
     } else {
-      setMessage("Revisa tu correo para confirmar tu cuenta.");
+      setMessage("Cuenta creada. Ahora puedes iniciar sesion.");
     }
     setIsLoading(false);
   };
@@ -91,7 +87,10 @@ export default function LoginPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={isSignUp ? handleSignUp : handleLogin} className="space-y-4">
+            <form
+              onSubmit={isSignUp ? handleSignUp : handleLogin}
+              className="space-y-4"
+            >
               {isSignUp && (
                 <div className="space-y-2">
                   <Label htmlFor="fullName">Nombre completo</Label>
@@ -144,11 +143,7 @@ export default function LoginPage() {
                 </Alert>
               )}
 
-              <Button
-                type="submit"
-                className="w-full"
-                disabled={isLoading}
-              >
+              <Button type="submit" className="w-full" disabled={isLoading}>
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />

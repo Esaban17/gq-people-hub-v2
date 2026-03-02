@@ -1,95 +1,106 @@
-import { createClient } from "@/lib/supabase/server";
-import { redirect } from "next/navigation";
+import { requireAuth } from "@/lib/auth-utils";
+import { prisma } from "@/lib/prisma";
 import { Logo } from "@/components/logo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import type { Profile, TimeOffBalance, TimeOffRequest, OnboardingTask } from "@/lib/types";
-import { ROLE_LABELS, STATUS_LABELS, ABSENCE_TYPE_LABELS, TASK_STATUS_LABELS } from "@/lib/types";
-import { Calendar, Palmtree, CheckCircle, Clock, AlertCircle, Cake } from "lucide-react";
+import type { Profile, OnboardingTask } from "@/lib/types";
+import { ROLE_LABELS, TASK_STATUS_LABELS } from "@/lib/types";
+import { Palmtree, CheckCircle, Cake } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
 export default async function DashboardPage() {
-  const supabase = await createClient();
+  const sessionUser = await requireAuth();
 
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .single() as { data: Profile | null };
+  const profile = await prisma.user.findUnique({
+    where: { id: sessionUser.id },
+  });
 
   const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
-  const currentMonth = today.getMonth() + 1; // getMonth is 0-indexed
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const currentMonth = today.getMonth() + 1;
   const currentDay = today.getDate();
 
   // Fetch people on vacation today
-  const { data: onVacation } = await supabase
-    .from("time_off_requests")
-    .select("*, profiles(full_name, avatar_url, position)")
-    .eq("status", "aprobada")
-    .lte("start_date", todayStr)
-    .gte("end_date", todayStr) as { data: (TimeOffRequest & { profiles: Profile })[] | null };
+  const onVacationRaw = await prisma.timeOffRequest.findMany({
+    where: {
+      status: "aprobada",
+      start_date: { lte: todayStart },
+      end_date: { gte: todayStart },
+    },
+    include: {
+      user: { select: { full_name: true, avatar_url: true, position: true } },
+    },
+  });
+
+  const onVacation = onVacationRaw.map((req) => ({
+    id: req.id,
+    profiles: {
+      full_name: req.user.full_name,
+      avatar_url: req.user.avatar_url,
+      position: req.user.position,
+    },
+  }));
 
   // Fetch birthdays today
-  // Note: Supabase/Postgres specific query for date parts might need raw SQL or specific filter.
-  // Using a simpler approach: fetch all active profiles and filter in JS if dataset is small, 
-  // OR use .rpc() if we had a function. For now, let's try to select needed fields and filter JS side 
-  // as the employee count is likely low for this MVP. 
-  // Ideally: .filter('birth_date', 'eq', today-month-day pattern) - hard with standard filter.
-  // Alternative: Create a postgres function later if needed. For now, fetch all users with birth_date.
-  const { data: allProfiles } = await supabase
-    .from("profiles")
-    .select("id, full_name, avatar_url, birth_date, position")
-    .eq("is_active", true);
+  const allProfiles = await prisma.user.findMany({
+    where: { is_active: true },
+    select: { id: true, full_name: true, avatar_url: true, birth_date: true, position: true },
+  });
 
-  const birthdaysToday = allProfiles?.filter(p => {
+  const birthdaysToday = allProfiles.filter((p) => {
     if (!p.birth_date) return false;
-    const bdate = new Date(p.birth_date);
-    // Be careful with timezone, birth_date string usually YYYY-MM-DD.
-    // Parse manually to avoid timezone shifts.
-    const [y, m, d] = p.birth_date.split('-').map(Number);
-    return m === currentMonth && d === currentDay;
-  }) || [];
+    const bdate = p.birth_date;
+    return (bdate.getMonth() + 1) === currentMonth && bdate.getDate() === currentDay;
+  });
 
-  // Fetch pending tasks - either assigned to user OR from user's own onboarding
+  // Fetch pending tasks
   let pendingTasks: OnboardingTask[] = [];
 
-  // Tasks where user is responsible
-  const { data: responsibleTasks } = await supabase
-    .from("onboarding_tasks")
-    .select("*")
-    .eq("responsible_id", user.id)
-    .neq("status", "completada")
-    .limit(5) as { data: OnboardingTask[] | null };
+  const responsibleTasksRaw = await prisma.onboardingTask.findMany({
+    where: {
+      responsible_id: sessionUser.id,
+      status: { not: "completada" },
+    },
+    take: 5,
+  });
 
-  // Tasks from user's own onboarding process (if empleado)
   if (profile?.role === "empleado") {
-    const { data: myOnboarding } = await supabase
-      .from("onboarding_processes")
-      .select("id")
-      .eq("employee_id", user.id)
-      .single();
+    const myOnboarding = await prisma.onboardingProcess.findFirst({
+      where: { employee_id: sessionUser.id },
+      select: { id: true },
+    });
 
     if (myOnboarding) {
-      const { data: myTasks } = await supabase
-        .from("onboarding_tasks")
-        .select("*")
-        .eq("onboarding_id", myOnboarding.id)
-        .neq("status", "completada")
-        .limit(5) as { data: OnboardingTask[] | null };
+      const myTasksRaw = await prisma.onboardingTask.findMany({
+        where: {
+          onboarding_id: myOnboarding.id,
+          status: { not: "completada" },
+        },
+        take: 5,
+      });
 
-      pendingTasks = myTasks || [];
+      pendingTasks = myTasksRaw.map((t) => ({
+        ...t,
+        category: t.category as OnboardingTask["category"],
+        status: t.status as OnboardingTask["status"],
+        due_date: t.due_date?.toISOString().split("T")[0] ?? null,
+        completed_at: t.completed_at?.toISOString() ?? null,
+        created_at: t.created_at.toISOString(),
+        updated_at: t.updated_at.toISOString(),
+      }));
     }
   } else {
-    pendingTasks = responsibleTasks || [];
+    pendingTasks = responsibleTasksRaw.map((t) => ({
+      ...t,
+      category: t.category as OnboardingTask["category"],
+      status: t.status as OnboardingTask["status"],
+      due_date: t.due_date?.toISOString().split("T")[0] ?? null,
+      completed_at: t.completed_at?.toISOString() ?? null,
+      created_at: t.created_at.toISOString(),
+      updated_at: t.updated_at.toISOString(),
+    }));
   }
 
   return (
@@ -103,7 +114,7 @@ export default async function DashboardPage() {
               Bienvenido, {profile?.full_name || "Usuario"}
             </h1>
             <p className="text-muted-foreground">
-              {profile ? ROLE_LABELS[profile.role] : ""} - {profile?.position || "Sin puesto asignado"}
+              {profile ? ROLE_LABELS[profile.role as keyof typeof ROLE_LABELS] : ""} - {profile?.position || "Sin puesto asignado"}
             </p>
           </div>
         </div>
@@ -176,7 +187,7 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* Pending Tasks (Kept as it's useful) */}
+        {/* Pending Tasks */}
         <Card className="col-span-1 lg:col-span-1">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-lg font-medium flex items-center gap-2">
